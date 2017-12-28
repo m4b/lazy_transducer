@@ -1,0 +1,13 @@
+[package]
+name = "lazy_transducer"
+version = "0.1.0"
+authors = ["m4b <m4b.github.io@gmail.com>"]
+
+[dependencies]
+rayon = "0.9"
+scroll = "0.8"
+failure = "0.1.1"
+
+[dev-dependencies]
+scroll = {version = "0.8", features = ["derive"] }
+byteorder = "1"
