@@ -5,8 +5,35 @@ use scroll::{self, ctx};
 use scroll::ctx::SizeWith;
 use failure::Error;
 
-use {LazyTransducer, ScrollTransducer};
+use {LazyTransducer, ScrollTransducer, TransducerError};
 
+/// A builder is useful for when the transducer needs to be constructed incrementally, or
+/// only when after certain information is present.
+///
+/// # Example
+///
+/// ```rust
+/// use lazy_transducer::{LazyTransducer, Builder};
+/// use std::mem::size_of;
+/// use std::mem::transmute;
+///
+/// let bytes: Vec<u8> = vec![1u8, 0, 2, 0, 3, 0, 4, 0];
+/// let mut builder = Builder::new(&bytes);
+/// let maybe_number_of_elements = Some(4);
+/// if let Some(count) = maybe_number_of_elements {
+///   builder = builder.count(count);
+/// }
+/// // if the count was None, we'd have 0 elements, but the transducer is still constructable,
+/// // similar to an empty iterator
+/// let lt: LazyTransducer<_, u16> = builder.transducer(|input, index| {
+///   let start = size_of::<u16>() * index;
+///   unsafe { *transmute::<_, &u16>(&input[start]) }
+/// });
+///  // note: the data will be 1, 2, 3, 4, for little-endian machines, but not for big-endian
+/// for (i, n) in lt.into_iter().enumerate() {
+///   println!("{}: {}", i, n);
+/// }
+/// ```
 pub struct Builder<'a, Input, Output>
     where Input: 'a + Copy,
           Output: 'a {
@@ -57,12 +84,12 @@ impl<'a, Input, Output> Builder<'a, Input, Output>
 
 impl<'a, Output> Builder<'a, &'a [u8], Output>
 {
+    ///
     pub fn parse_with<Ctx, E>(self, ctx: Ctx) -> Result<ScrollTransducer<'a, Output, Ctx>, Error>
-
     where
         Ctx: Default + Copy,
         E: From<scroll::Error> + Debug,
-        Output: 'a + ctx::TryFromCtx<'a, Ctx, Error =E, Size = usize> + SizeWith<Ctx, Units = usize>
+        Output: 'a + ctx::TryFromCtx<'a, Ctx, Error = E, Size = usize> + SizeWith<Ctx, Units = usize>
     {
         ScrollTransducer::parse_with(self.input, self.count, ctx)
     }
