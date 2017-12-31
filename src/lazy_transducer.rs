@@ -42,6 +42,85 @@ impl<'a, Input, Output> LazyTransducer<'a, Input, Output>
     }
     /// Create a new LazyTransducer with `count` elements in `contents`, using `transducer` to extract
     /// them.
+    ///
+    /// # Basic Example
+    ///
+    /// We need to provide a data source, the number of elements in the data source, and the means of
+    /// extracting the elements out of the data source (the transducer).
+    ///
+    /// For a simple case, we can consider a backing array of `u32`s, which we cast to `u64`s.
+    ///
+    /// ```rust
+    /// extern crate lazy_transducer;
+    /// use lazy_transducer::LazyTransducer;
+    ///
+    /// # fn main() {
+    /// let data = [0xdeadbeefu32, 0xcafed00d];
+    /// let lt: LazyTransducer<&[u32], u64> = LazyTransducer::new(&data, 2, |input, idx| input[idx] as u64);
+    ///
+    /// let cafedood = lt.get(1).expect("has 2 elements");
+    /// assert_eq!(cafedood, 0xcafed00d);
+    ///
+    /// for (i, elem) in lt.into_iter().enumerate() {
+    ///   println!("{}: {}", i, elem);
+    /// }
+    /// # }
+    /// ```
+    ///
+    /// # Advanced Example
+    ///
+    /// This example uses the [bincode](https://github.com/TyOverby/bincode) binary serializer as
+    /// its transducer.
+    ///
+    /// ```rust
+    /// extern crate lazy_transducer;
+    /// #[macro_use]
+    /// extern crate serde_derive;
+    /// extern crate serde;
+    /// extern crate bincode;
+    /// extern crate rayon;
+    ///
+    /// use lazy_transducer::LazyTransducer;
+    /// use bincode::{serialize, deserialize, Infinite, Error};
+    /// use rayon::prelude::*;
+    ///
+    /// #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    /// pub struct Foo {
+    ///   x: u64,
+    ///   y: f32,
+    ///   z: bool,
+    /// }
+    ///
+    /// fn run() -> Result<(), Error> {
+    ///   let foo1 = Foo { x: 0xcafed00d, y: 0.75, z: false };
+    ///   let foo2 = Foo { x: 0xdeadbeef, y: 0.50, z: true };
+    ///
+    ///   // we need to serialize the data, which we do by extending a byte vector with the individually
+    ///   // serialized components
+    ///   let mut data = serialize(&foo1, Infinite)?;
+    ///   let sizeof_serialized_element = data.len();
+    ///   data.extend_from_slice(&serialize(&foo2, Infinite)?);
+    ///
+    ///   // we construct our transducer by providing the serialized bytes _and_ the size of a serialized
+    ///   // element as input; our transducer just reads at the appropriate byte offset, and deserializes!
+    ///   let lt: LazyTransducer<_, Result<Foo, Error>> =
+    ///     LazyTransducer::new((data.as_slice(), sizeof_serialized_element),
+    ///                         2,
+    ///                         |(input, size), idx| {
+    ///                            deserialize(&input[(idx * size)..])
+    ///   });
+    ///
+    ///   let foo2_ = lt.get(1).expect("has 2 elements")?;
+    ///   assert_eq!(foo2, foo2_);
+    ///
+    ///   // and now with the help of rayon, we iterate over the items in parallel
+    ///   lt.into_par_iter().for_each(|elem| {
+    ///     println!("{:?}", elem);
+    ///   });
+    ///   Ok(())
+    /// }
+    /// # fn main() { run().unwrap() }
+    /// ```
     pub fn new(contents: Input,
                count: usize,
                transducer: fn(Input, usize) -> Output)
@@ -55,7 +134,25 @@ impl<'a, Input, Output> LazyTransducer<'a, Input, Output>
         }
     }
 
-    /// Get an element out of the lazy transducer
+    /// Get an element out of the lazy transducer, returning `None` if the index is greater than
+    /// the number of elements in this lazy transducer.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// extern crate lazy_transducer;
+    /// use lazy_transducer::LazyTransducer;
+    ///
+    /// # fn main() {
+    /// let data = [0xdeadbeefu64, 0xcafed00d];
+    /// let lt: LazyTransducer<&[u64], &u64> = LazyTransducer::new(&data, 2, |input, idx| &input[idx]);
+    ///
+    /// let cafedood = lt.get(1).expect("has 2 elements");
+    /// assert_eq!(*cafedood, 0xcafed00d);
+    ///
+    /// assert!(lt.get(2).is_none());
+    /// # }
+    /// ```
     #[inline]
     pub fn get(&self, idx: usize) -> Option<Output> {
         if idx >= self.count {
@@ -75,29 +172,27 @@ impl<'a, Input, Output> LazyTransducer<'a, Input, Output>
 ///
 /// # Example
 ///
-/// ```no_test, rust
-/// //extern crate lazy_transducer;
-/// //#[macro_use]
-/// //extern crate scroll;
-/// use lazy_transducer;
-/// //use scroll;
+/// ```rust
+/// extern crate lazy_transducer;
+/// #[macro_use]
+/// extern crate scroll;
 /// use lazy_transducer::ScrollTransducer;
 ///
+/// #[derive(Debug, Pread, SizeWith)]
 /// #[repr(C)]
-/// #[derive(Debug, Clone, Copy, PartialEq, Default)]
-/// //#[derive(Pread, Pwrite, SizeWith)]
 /// pub struct Rel {
 ///     pub r_offset: u32,
 ///     pub r_info: u32,
 /// }
 ///
-/// let bytes = vec![0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 1, 0, 0, 0, 5];
-/// let lt: ScrollTransducer<Rel> = ScrollTransducer::parse_with(&bytes, 2, scroll::LE).unwrap();
+/// # fn main () {
+/// let bytes = vec![4, 0, 0, 0, 5, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0];
+/// let lt: ScrollTransducer<Rel, scroll::Endian> = ScrollTransducer::parse_with(&bytes, 2, scroll::LE).unwrap();
 /// for reloc in lt.into_iter() {
 ///   assert_eq!(reloc.r_info, 5);
 ///   println!("{:?}", reloc);
 /// }
-///
+/// # }
 /// ```
 pub type ScrollTransducer<'a, Output, Ctx = scroll::Endian> = LazyTransducer<'a, (&'a[u8], Ctx), Output>;
 
@@ -119,16 +214,22 @@ impl<'a, Output, Ctx, E> ScrollTransducer<'a, Output, Ctx>
     /// # Example
     ///
     /// ```rust
+    /// extern crate lazy_transducer;
+    /// extern crate rayon;
     /// use lazy_transducer::{ScrollTransducer, Endian};
-    /// //extern crate rayon;
-    /// //use rayon::prelude::*;
+    /// use rayon::prelude::*;
     ///
-    /// let bytes = vec![1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0xde, 0xad, 0xbe, 0xef];
-    /// let lt = ScrollTransducer::parse_with(&bytes, 4, Endian::Little);
-    /// lt.into_iter().for_each(|n| {
-    ///   println!("{}", n);
+    /// # fn main() {
+    /// let bytes = vec![1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0xef, 0xbe, 0xad, 0xde];
+    /// let lt: ScrollTransducer<u32> = ScrollTransducer::parse_with(&bytes, 4, Endian::Little).unwrap();
+    ///
+    /// let deadbeef = lt.get(3).expect("has 4 elements");
+    /// assert_eq!(deadbeef, 0xdeadbeef);
+    ///
+    /// lt.into_par_iter().for_each(|n| {
+    ///   println!("{:?}", n);
     /// });
-    /// assert!(false);
+    /// # }
     /// ```
     pub fn parse_with(contents: &'a [u8],
                       count: usize,
@@ -161,27 +262,10 @@ impl<'a, Input: Copy, Output> Clone for LazyTransducer<'a, Input, Output> {
     }
 }
 
+/// A generic iterator over the elements produced by the lazy transducer
 pub struct IntoIter<'a, Input: 'a + Copy, Output: 'a> {
     current: usize,
     lt: LazyTransducer<'a, Input, Output>,
-}
-
-pub struct Iter<'b, 'a: 'b, Input: 'a + Copy, Output: 'a> {
-    current: usize,
-    lt: &'b LazyTransducer<'a, Input, Output>,
-}
-
-impl<'a, 'b, Input: Copy, Output> Iterator for Iter<'a, 'b, Input, Output> {
-    type Item = Output;
-    fn next (&mut self) -> Option<Self::Item> {
-        if self.current >= self.lt.count {
-            None
-        } else {
-            let output = self.lt.get(self.current);
-            self.current += 1;
-            output
-        }
-    }
 }
 
 impl<'a, Input: Copy, Output> Iterator for IntoIter<'a, Input, Output> {
@@ -211,12 +295,12 @@ impl<'a, Input: Copy, Output> IntoIterator for LazyTransducer<'a, Input, Output>
 
 impl<'a, 'b, Input: Copy, Output> IntoIterator for &'b LazyTransducer<'a, Input, Output> {
     type Item = Output;
-    type IntoIter = Iter<'b, 'a, Input, Output>;
+    type IntoIter = IntoIter<'a, Input, Output>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Iter {
+        IntoIter {
             current: 0,
-            lt: self,
+            lt: self.clone(),
         }
     }
 }
@@ -227,6 +311,10 @@ impl<'a, Input: Copy, Output> ExactSizeIterator for IntoIter<'a, Input, Output> 
     }
 }
 
+/// A generic, parallel iterator over the elements produced by the lazy transducer.
+///
+/// This implements rayon's ParallelIterator trait, so you need only use `rayon::prelude::*` and
+/// iterate in parallel via the `into_par_iter()` method.
 pub struct IntoParIter<'a, Input: 'a + Copy, Output: 'a> {
     current: usize,
     lt: LazyTransducer<'a, Input, Output>,
@@ -252,6 +340,7 @@ impl<'a, Input: Sync + Send + Copy, Output: Send + Sync> ParallelIterator for In
     }
 }
 
+/// The parallel iterator producer for a lazy transducer, required by rayon.
 pub struct Producer<'b, 'a: 'b, Input: 'a + Sync + Copy + Send, Output: 'a + Send + Sync> {
     lt: &'b LazyTransducer<'a, Input, Output>,
     current: usize,

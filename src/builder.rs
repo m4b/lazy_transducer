@@ -7,8 +7,8 @@ use failure::Error;
 
 use {LazyTransducer, ScrollTransducer, TransducerError};
 
-/// A builder is useful for when the transducer needs to be constructed incrementally, or
-/// only when after certain information is present.
+/// A builder is useful for when the transducer needs to be constructed incrementally, i.e.,
+/// certain information is present later on, or is optional, etc.
 ///
 /// # Example
 ///
@@ -26,9 +26,12 @@ use {LazyTransducer, ScrollTransducer, TransducerError};
 /// // if the count was None, we'd have 0 elements, but the transducer is still constructable,
 /// // similar to an empty iterator
 /// let lt: LazyTransducer<_, u16> = builder.transducer(|input, index| {
-///   let start = size_of::<u16>() * index;
-///   unsafe { *transmute::<_, &u16>(&input[start]) }
-/// });
+///     let start = size_of::<u16>() * index;
+///     unsafe { *transmute::<_, &u16>(&input[start]) }
+///   })
+///   .finish()
+///   .unwrap();
+///
 ///  // note: the data will be 1, 2, 3, 4, for little-endian machines, but not for big-endian
 /// for (i, n) in lt.into_iter().enumerate() {
 ///   println!("{}: {}", i, n);
@@ -37,60 +40,74 @@ use {LazyTransducer, ScrollTransducer, TransducerError};
 pub struct Builder<'a, Input, Output>
     where Input: 'a + Copy,
           Output: 'a {
-    input: Input,
-    //input: Option<Input>,
+    input: Option<Input>,
     count: usize,
-    //transducer: Option<fn(Input, usize) -> Output>,
+    transducer: Option<fn(Input, usize) -> Output>,
     _marker: PhantomData<&'a (Input, Output)>,
 }
 
 impl<'a, Input, Output> Builder<'a, Input, Output>
     where Input: 'a + Copy,
           Output: 'a {
-    // todo: do this later
-//    pub fn empty() -> Self {
-//        Builder {
-//            input: None,
-//            transducer: None,
-//            count: 0,
-//            _marker: PhantomData::default(),
-//        }
-//    }
-    pub fn new(input: Input) -> Self {
+    /// Creates an empty builder; you must set the input and transducer before calling `finish`
+    /// otherwise this is a runtime error.
+    pub fn empty() -> Self {
         Builder {
-            input,
+            input: None,
             count: 0,
+            transducer: None,
             _marker: PhantomData::default(),
         }
     }
+    /// Create a new builder with the given `input`; you must set the transducer before calling `finish`
+    /// otherwise this is a runtime error.
+    pub fn new(input: Input) -> Self {
+        Builder {
+            input: Some(input),
+            count: 0,
+            transducer: None,
+            _marker: PhantomData::default(),
+        }
+    }
+    /// Set (or reset) the input.
     pub fn input(mut self, input: Input) -> Self {
-        self.input = input;
+        self.input = Some(input);
         self
     }
+    /// Set the number of output elements in the input source.
     pub fn count(mut self, count: usize) -> Self {
         self.count = count;
         self
     }
-    // TODO: make this return
-    pub fn transducer(self, transducer: fn(Input, usize) -> Output) -> LazyTransducer<'a, Input, Output> {
-        LazyTransducer {
-            contents: self.input,
-            count: self.count,
-            _marker: PhantomData::default(),
-            transducer,
-        }
+    /// Set the transducer from input source to output elements.
+    pub fn transducer(mut self, transducer: fn(Input, usize) -> Output) -> Self {
+        self.transducer = Some(transducer);
+        self
+    }
+    /// Finish building the lazy transducer, and return it; if the input source or the transducer is missing
+    /// this is a runtime error.
+    pub fn finish(self) -> Result<LazyTransducer<'a, Input, Output>, Error> {
+        let contents = self.input.ok_or(TransducerError::BuilderError("No input given".to_string()))?;
+        let transducer = self.transducer.ok_or(TransducerError::BuilderError("No transducer given".to_string()))?;
+        Ok(LazyTransducer {
+                contents,
+                count: self.count,
+                transducer,
+                _marker: PhantomData::default(),
+        })
     }
 }
 
 impl<'a, Output> Builder<'a, &'a [u8], Output>
 {
-    ///
+    /// Create a scroll-based transducer with the given parsing `ctx`.
     pub fn parse_with<Ctx, E>(self, ctx: Ctx) -> Result<ScrollTransducer<'a, Output, Ctx>, Error>
     where
         Ctx: Default + Copy,
         E: From<scroll::Error> + Debug,
         Output: 'a + ctx::TryFromCtx<'a, Ctx, Error = E, Size = usize> + SizeWith<Ctx, Units = usize>
     {
-        ScrollTransducer::parse_with(self.input, self.count, ctx)
+        let input = self.input.ok_or(TransducerError::BuilderError("No input given".to_string()))?;
+        ScrollTransducer::parse_with(input, self.count, ctx)
     }
 }
