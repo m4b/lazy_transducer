@@ -1,10 +1,10 @@
-# Lazy Transducer
+# Lazy Transducer [![Build Status](https://travis-ci.org/m4b/lazy_transducer.svg?branch=master)](https://travis-ci.org/m4b/lazy_transducer)
 
-Lazy transducers are generic, lazy, parallel, iterators transforming one data source into an output datum.
+Lazy transducers are generic, lazy, parallel, iterators transforming one data source into `n` output data types.
 
 See the online [documentation](https://docs.rs/lazy_transducer) for more information.
 
-# Using
+## Using
 
 Add this to your `Cargo.toml`
 
@@ -13,10 +13,13 @@ Add this to your `Cargo.toml`
 lazy_transducer = "0.1"
 ```
 
-# Example
+## Example
 
 ```rust
 extern crate lazy_transducer;
+extern crate rayon;
+
+use rayon::prelude::*;
 use lazy_transducer::LazyTransducer;
 
 fn main() {
@@ -26,8 +29,8 @@ fn main() {
   let cafedood = lt.get(1).expect("has 2 elements");
   assert_eq!(cafedood, 0xcafed00d);
 
-  for (i, elem) in lt.into_iter().enumerate() {
-    println!("{}: {}", i, elem);
-  }
+  lt.into_par_iter().for_each(|elem| {
+    println!("{}", elem);
+  });
 }
 ```
