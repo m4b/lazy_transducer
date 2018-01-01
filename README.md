@@ -1,6 +1,6 @@
 # Lazy Transducer [![Build Status](https://travis-ci.org/m4b/lazy_transducer.svg?branch=master)](https://travis-ci.org/m4b/lazy_transducer)
 
-Lazy transducers are generic, lazy, parallel, iterators transforming one data source into `n` output data types.
+Lazy transducers are generic, lazy, parallel, indexable iterators transforming one data source into `n` output data types.
 
 See the online [documentation](https://docs.rs/lazy_transducer) for more information.
 
