@@ -1,8 +1,9 @@
 [package]
 name = "lazy_transducer"
-version = "0.1.0"
+version = "0.1.1"
 readme = "README.md"
 authors = ["m4b <m4b.github.io@gmail.com>"]
+repository = "https://github.com/m4b/lazy_transducer"
 license = "MIT"
 description = "Lazy, parallel, indexable, generic data iterators"
 keywords = ["lazy", "parallel", "iterator", "data"]
