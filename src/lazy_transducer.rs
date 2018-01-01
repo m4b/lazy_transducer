@@ -10,7 +10,7 @@ use scroll::ctx::SizeWith;
 
 use TransducerError;
 
-/// A lazy transducer is a declarative specification for the transformation of one type of data to another.
+/// A lazy transducer transforms `n` elements from a source type into an output type.
 ///
 /// The transformer is called the transducer, which receives the original source input, and an index
 /// corresponding to the `i`th element, and returns the corresponding `i`th element out of that source.
@@ -19,8 +19,87 @@ use TransducerError;
 ///
 /// 1. Lazy - it never parses any elements unless you request it to do so
 /// 2. Iterable - one can iterate over every element
-/// 3. Indexable - accessing an element can be O(1)
+/// 3. Indexable - accessing an element is O(1)
 /// 4. Parallel - one can iterate in parallel over every element
+///
+/// # Basic Example
+///
+/// We need to provide a data source, the number of elements in the data source, and the means of
+/// extracting the elements out of the data source (the transducer).
+///
+/// For a simple case, we can consider a backing array of `u32`s, which we cast to `u64`s.
+///
+/// ```rust
+/// extern crate lazy_transducer;
+/// use lazy_transducer::LazyTransducer;
+///
+/// # fn main() {
+/// let data = [0xdeadbeefu32, 0xcafed00d];
+/// let lt: LazyTransducer<&[u32], u64> = LazyTransducer::new(&data, 2, |input, idx| input[idx] as u64);
+///
+/// let cafedood = lt.get(1).expect("has 2 elements");
+/// assert_eq!(cafedood, 0xcafed00d);
+///
+/// for (i, elem) in lt.into_iter().enumerate() {
+///   println!("{}: {}", i, elem);
+/// }
+/// # }
+/// ```
+///
+/// # Advanced Example
+///
+/// This example uses the [bincode](https://github.com/TyOverby/bincode) binary serializer as
+/// its transducer.
+///
+/// ```rust
+/// extern crate lazy_transducer;
+/// #[macro_use]
+/// extern crate serde_derive;
+/// extern crate serde;
+/// extern crate bincode;
+/// extern crate rayon;
+///
+/// use lazy_transducer::LazyTransducer;
+/// use bincode::{serialize, deserialize, Infinite, Error};
+/// use rayon::prelude::*;
+///
+/// #[derive(Debug, PartialEq, Serialize, Deserialize)]
+/// pub struct Foo {
+///   x: u64,
+///   y: f32,
+///   z: bool,
+/// }
+///
+/// fn run() -> Result<(), Error> {
+///   let foo1 = Foo { x: 0xcafed00d, y: 0.75, z: false };
+///   let foo2 = Foo { x: 0xdeadbeef, y: 0.50, z: true };
+///
+///   // we need to serialize the data, which we do by extending a byte vector with the individually
+///   // serialized components
+///   let mut data = serialize(&foo1, Infinite)?;
+///   let sizeof_serialized_element = data.len();
+///   data.extend_from_slice(&serialize(&foo2, Infinite)?);
+///
+///   // we construct our transducer by providing the serialized bytes _and_ the size of a serialized
+///   // element as input; our transducer just reads at the appropriate byte offset, and deserializes!
+///   let lt: LazyTransducer<_, Result<Foo, Error>> =
+///     LazyTransducer::new((data.as_slice(), sizeof_serialized_element),
+///                         2,
+///                         |(input, size), idx| {
+///                            deserialize(&input[(idx * size)..])
+///   });
+///
+///   let foo2_ = lt.get(1).expect("has 2 elements")?;
+///   assert_eq!(foo2, foo2_);
+///
+///   // and now with the help of rayon, we iterate over the items in parallel
+///   lt.into_par_iter().for_each(|elem| {
+///     println!("{:?}", elem);
+///   });
+///   Ok(())
+/// }
+/// # fn main() { run().unwrap() }
+/// ```
 #[derive(Debug)]
 pub struct LazyTransducer<'a, Input, Output>
     where Input: 'a + Copy,
@@ -43,83 +122,12 @@ impl<'a, Input, Output> LazyTransducer<'a, Input, Output>
     /// Create a new LazyTransducer with `count` elements in `contents`, using `transducer` to extract
     /// them.
     ///
-    /// # Basic Example
-    ///
-    /// We need to provide a data source, the number of elements in the data source, and the means of
-    /// extracting the elements out of the data source (the transducer).
-    ///
-    /// For a simple case, we can consider a backing array of `u32`s, which we cast to `u64`s.
+    /// # Example
     ///
     /// ```rust
-    /// extern crate lazy_transducer;
     /// use lazy_transducer::LazyTransducer;
-    ///
-    /// # fn main() {
     /// let data = [0xdeadbeefu32, 0xcafed00d];
     /// let lt: LazyTransducer<&[u32], u64> = LazyTransducer::new(&data, 2, |input, idx| input[idx] as u64);
-    ///
-    /// let cafedood = lt.get(1).expect("has 2 elements");
-    /// assert_eq!(cafedood, 0xcafed00d);
-    ///
-    /// for (i, elem) in lt.into_iter().enumerate() {
-    ///   println!("{}: {}", i, elem);
-    /// }
-    /// # }
-    /// ```
-    ///
-    /// # Advanced Example
-    ///
-    /// This example uses the [bincode](https://github.com/TyOverby/bincode) binary serializer as
-    /// its transducer.
-    ///
-    /// ```rust
-    /// extern crate lazy_transducer;
-    /// #[macro_use]
-    /// extern crate serde_derive;
-    /// extern crate serde;
-    /// extern crate bincode;
-    /// extern crate rayon;
-    ///
-    /// use lazy_transducer::LazyTransducer;
-    /// use bincode::{serialize, deserialize, Infinite, Error};
-    /// use rayon::prelude::*;
-    ///
-    /// #[derive(Debug, PartialEq, Serialize, Deserialize)]
-    /// pub struct Foo {
-    ///   x: u64,
-    ///   y: f32,
-    ///   z: bool,
-    /// }
-    ///
-    /// fn run() -> Result<(), Error> {
-    ///   let foo1 = Foo { x: 0xcafed00d, y: 0.75, z: false };
-    ///   let foo2 = Foo { x: 0xdeadbeef, y: 0.50, z: true };
-    ///
-    ///   // we need to serialize the data, which we do by extending a byte vector with the individually
-    ///   // serialized components
-    ///   let mut data = serialize(&foo1, Infinite)?;
-    ///   let sizeof_serialized_element = data.len();
-    ///   data.extend_from_slice(&serialize(&foo2, Infinite)?);
-    ///
-    ///   // we construct our transducer by providing the serialized bytes _and_ the size of a serialized
-    ///   // element as input; our transducer just reads at the appropriate byte offset, and deserializes!
-    ///   let lt: LazyTransducer<_, Result<Foo, Error>> =
-    ///     LazyTransducer::new((data.as_slice(), sizeof_serialized_element),
-    ///                         2,
-    ///                         |(input, size), idx| {
-    ///                            deserialize(&input[(idx * size)..])
-    ///   });
-    ///
-    ///   let foo2_ = lt.get(1).expect("has 2 elements")?;
-    ///   assert_eq!(foo2, foo2_);
-    ///
-    ///   // and now with the help of rayon, we iterate over the items in parallel
-    ///   lt.into_par_iter().for_each(|elem| {
-    ///     println!("{:?}", elem);
-    ///   });
-    ///   Ok(())
-    /// }
-    /// # fn main() { run().unwrap() }
     /// ```
     pub fn new(contents: Input,
                count: usize,
@@ -163,7 +171,7 @@ impl<'a, Input, Output> LazyTransducer<'a, Input, Output>
     }
 }
 
-/// A scroll-based transducer only requires a parsing context for construction.
+/// A [scroll](https://docs.rs/scroll)-based transducer only requires a parsing context for construction.
 /// The correct method is statically dispatched according to the output type, and the bounds are checked
 /// according to the size of the input and the number of elements requested from the byte source.
 ///
