@@ -1,7 +1,13 @@
 [package]
 name = "lazy_transducer"
 version = "0.1.0"
+readme = "README.md"
 authors = ["m4b <m4b.github.io@gmail.com>"]
+license = "MIT"
+description = "Lazy, parallel, indexable, generic data iterators"
+keywords = ["lazy", "parallel", "iterator", "data"]
+documentation = "https://docs.rs/lazy_transducer"
+include = ["src/**/*", "Cargo.toml", "LICENSE", "README.md", "tests/*"]
 
 [dependencies]
 rayon = "0.9"
@@ -14,3 +20,7 @@ byteorder = "1"
 serde_derive = "1"
 serde = "1"
 bincode = "0.9"
+
+[badges.travis-ci]
+branch = "master"
+repository = "m4b/lazy_transducer"
